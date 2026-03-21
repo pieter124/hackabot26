@@ -12,7 +12,7 @@ from pal.utilities.vision import Camera2D
 class QArmMini():
 
 
-    HOME_POSE  = np.array([0, np.pi / 2, -np.pi / 2, np.pi / 2], dtype=np.float64)
+    HOME_POSE  = np.array([0, np.pi / 2, -np.pi / 2, np.pi/6], dtype=np.float64)
     SLEEP_POSE = np.array([0, 0, 0, np.pi / 2], dtype=np.float64)
 
     LIMITS_MAX = np.array([4*np.pi/3, 13*np.pi/12, np.pi/6, 8*np.pi/9], dtype=np.float64)

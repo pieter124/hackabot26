@@ -1,3 +1,4 @@
+
 #finds the pal folder and adds it to the path
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -72,9 +73,9 @@ try:
             # Print any new detections to the terminal
             # for d in detections:
             #     print(f"[BLOCK] {d['color']:5s}  centre=({d['cx']:4d},{d['cy']:4d})  area={d['area']:.0f}px²")
-            if i % 30 == 0:
-                for d in detections:
-                    x, y, z = estimate_3d_position(d, cam_mtx=CAM_MTX)
+            for d in detections:
+                x, y, z = estimate_3d_position(d, cam_mtx=CAM_MTX)
+                if i % 30 == 0:
                     print(f"[{d['color']:5s}] X:{x:7.1f}mm  Y:{y:7.1f}mm  Z:{z:7.1f}mm")
 
             #cv2.imshow("QArm Mini Feed", frame)
@@ -98,15 +99,45 @@ try:
         # myMiniArm.write_gripper_PWM(-0.4) # Apply 40% power to close
         # myMiniArm.write_gripper_PWM(0)    # STOP the motor so it doesn't overheat
 
-        # 2. Control the Arm
-        # print(f"Calling with pos: {gripper_pos}")
-        myMiniArm.read_write_std(
-        kbdNav.move_joints_with_keyboard(timer.get_sample_time(), speed=np.pi/4), gripper_pos)
+        # 2. Forward kinematics — get current end-effector pose in base frame (metres)
+        pose, rotMatrix, gamma = myArmMath.forward_kinematics(myMiniArm.positionMeasured)
+        print(pose)
 
-        # 3. Math (Forward Kinematics)
-        pose, rotationMatrix, gamma = myArmMath.forward_kinematics(myMiniArm.positionMeasured)
-        if i == 0:
-            print(f"Pose: {pose}, Rot: {rotationMatrix}, Gamma: {gamma}")
+        # 3. If blocks detected, compute absolute position and move to first one
+        target_joints = kbdNav.move_joints_with_keyboard(timer.get_sample_time(), speed=np.pi/4)
+        if detections:
+            d = detections[0]  # target the first detected block
+            cam_x, cam_y, cam_z = estimate_3d_position(d, cam_mtx=CAM_MTX)
+
+            # Block position in camera frame (metres): +X right, +Y down, +Z depth
+            cam_pos_m = np.array([cam_x, cam_y, cam_z], dtype=np.float64) / 1000.0
+
+            # Camera-to-EE frame rotation — adjust to match physical camera mounting.
+            # Default: camera Z (depth) = EE X (forward), camera X = EE Y, camera Y = EE -Z
+            R_cam_to_ee = np.array([
+                [0, 0, 1],   # EE X  = camera Z (depth)
+                [1, 0, 0],   # EE Y  = camera X (right)
+                [0, -1, 0],  # EE Z  = camera -Y (up)
+            ], dtype=np.float64)
+
+            # Full chain: camera -> EE frame -> base frame (using FK rotation matrix)
+            block_pos = pose + rotMatrix @ (R_cam_to_ee @ cam_pos_m) - np.array([0.0, 0.0, 0.07])
+
+            # Gripper pointing straight down for pickup
+            pickup_gamma = -np.pi / 2
+
+            _, _, numSol, thetaOpt = myArmMath.inverse_kinematics(
+                block_pos, pickup_gamma, myMiniArm.positionMeasured)
+
+            if numSol > 0:
+                target_joints = thetaOpt.flatten()
+                if i % 30 == 0:
+                    print(f"Moving to {d['color']} block at {block_pos*1000} mm")
+            else:
+                if i % 30 == 0:
+                    print("Block out of reach — no IK solution")
+
+        myMiniArm.read_write_std(target_joints, gripper_pos)
 
         # grip = input()
         timer.sleep()

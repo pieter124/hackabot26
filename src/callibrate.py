@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import cv2  # <--- Added this for the camera
 import time
 import numpy as np
-from pal.products.qarm_mini import QArmMini, QArmMiniCamera
+from pal.products.qarm_mini import QArmMini
 from hal.content.qarm_mini import QArmMiniKeyboardNavigator, QArmMiniFunctions
 from pal.utilities.keyboard import QKeyboard
 from pal.utilities.timing   import QTimer
@@ -42,7 +42,8 @@ def callibrate_camera(images):
     # Final check before calibration
     if len(obj_points) > 0:
         ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(obj_points, img_points, gray.shape[::-1], None, None)
-        np.savez("camera_calibration.npz", mtx=mtx, dist=dist)
+        save_path = os.path.join(os.path.dirname(__file__), "camera_calibration.npz")
+        np.savez(save_path, mtx=mtx, dist=dist)
         print("Calibration successful! Saved to camera_calibration.npz")
     else:
         print("Calibration failed: No valid frames were processed.")
