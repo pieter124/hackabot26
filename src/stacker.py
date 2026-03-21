@@ -4,6 +4,7 @@ stacker.py - autonomous one-block-at-a-time tower stacker.
 
 import time
 import numpy as np
+from stacker_alg import schedule_blocks
 
 R_CAM_TO_EE = np.array([
     [ 0,  0,  1],  # Camera +Z (forward) maps to Gripper +X (forward)
@@ -11,10 +12,10 @@ R_CAM_TO_EE = np.array([
     [ 0, -1,  0],  # Camera +Y (down) maps to Gripper -Z (down)
 ], dtype=float)
 
-BLOCK_Z_MM        =   -45.0
-TOWER_Z_MM        =   -25.0
-TOWER_X_MM        = 249.2
-TOWER_Y_MM        =  52.3
+BLOCK_Z_MM        =   -35.0  # raised from -45: actual grip Z was -34.5 mm (see GRIP DIAG)
+TOWER_Z_MM        =   -15.0  # = BLOCK_Z_MM + BLOCK_HEIGHT_MM/2; prevents arm pushing into table
+TOWER_X_MM        = 200.0   # centre of table as seen from scan pose — update with measure_config.py
+TOWER_Y_MM        =   0.0   # arm points along +X at Y=0
 BLOCK_HEIGHT_MM   =  40.0
 TRAVEL_Z_MM       =  80.0
 GRIPPER_OPEN      =   0.0
@@ -22,8 +23,28 @@ GRIPPER_CLOSED    =   0.52
 GRIP_CURRENT_THR  =   0.10
 MOVE_TIMEOUT      =  10.0
 POSITION_TOL_MM   =   8.0
-TIMEOUT_ACCEPT_MM =  20.0
+TIMEOUT_ACCEPT_MM =  30.0
 SAFE_Z_FLOOR_MM   =  -65.0
+
+# Localization calibration offsets (mm).
+# The silver-bullet ray assumes the camera faces straight down; at gamma=-pi/4
+# it faces forward-and-down, causing a systematic X error. Tune these after
+# observing the "[GRIP DIAG]" printout — it shows actual vs intended position.
+# Positive X_OFFSET moves the target further from the base; Y_OFFSET moves it
+# laterally. Start at 0 and increment in 10mm steps until grips are centred.
+LOCALIZE_X_OFFSET_MM = 0.0
+LOCALIZE_Y_OFFSET_MM = 0.0
+
+# Number of consecutive frames a block must be detected before the arm commits.
+# Reduces single-frame noise without adding meaningful delay at 45 Hz.
+DETECTION_FRAMES_REQUIRED = 5
+
+# Blocks within this radius of the tower base are assumed to be already placed.
+TOWER_EXCLUSION_MM = 35.0   # just beyond the 40mm block footprint (~20mm radius + 15mm margin)
+
+# Side-approach: arm arrives beside the block at grip height, then slides in horizontally.
+# The offset is applied along the arm-base X axis (radially outward from the base).
+SIDE_APPROACH_OFFSET_MM = 70.0
 
 
 class BlockStacker:
@@ -53,6 +74,8 @@ class BlockStacker:
         self._waypoint_xyz = None
         self._state_start = None
         self._dwell_until = None
+        self._detection_buffer = []  # accumulates recent detections for averaging
+        self._failed_positions  = []  # list of (x_mm, y_mm, expiry_time) to skip
 
     def update(self, detections: list[dict], cam_mtx=None) -> float:
         if self.state == self.IDLE:
@@ -77,24 +100,77 @@ class BlockStacker:
 
     def _handle_idle(self, detections, cam_mtx):
         if not detections:
+            self._detection_buffer = []
             return
 
-        best = max(detections, key=lambda d: d["area"])
-        xy_arm_mm, source = self._localize_block_xy(best, cam_mtx)
-        if xy_arm_mm is None:
+        # Expire old failed positions.
+        now = time.monotonic()
+        self._failed_positions = [(fx, fy, exp) for fx, fy, exp in self._failed_positions if exp > now]
+
+        # Localize every detected block and build a candidate list.
+        candidates = []
+        for det in detections:
+            xy, _ = self._localize_block_xy(det, cam_mtx)
+            if xy is None:
+                continue
+            x, y = xy
+            if float(np.hypot(x - TOWER_X_MM, y - TOWER_Y_MM)) < TOWER_EXCLUSION_MM:
+                continue
+            if any(float(np.hypot(x - fx, y - fy)) < 40.0 for fx, fy, _ in self._failed_positions):
+                continue
+            candidates.append((det, x, y))
+
+        if not candidates:
+            self._detection_buffer = []
             return
 
-        x_arm, y_arm = xy_arm_mm
+        # Use stacker_alg scheduling: sort by base angle so the arm sweeps
+        # through blocks in the most efficient arc rather than jumping around.
+        scheduled = schedule_blocks([(x, y) for _, x, y in candidates])
+        _, (best_x, best_y) = scheduled[0]
+        best_det = next(d for d, x, y in candidates if x == best_x and y == best_y)
+
+        # Accumulate N consistent frames on the same target before committing.
+        if self._detection_buffer:
+            last_det, last_x, last_y = self._detection_buffer[-1]
+            if (best_det["color"] != last_det["color"] or
+                    float(np.hypot(best_x - last_x, best_y - last_y)) > 30.0):
+                self._detection_buffer = []
+
+        self._detection_buffer.append((best_det, best_x, best_y))
+
+        if len(self._detection_buffer) < DETECTION_FRAMES_REQUIRED:
+            return
+
+        # Average arm-frame position over the buffer for a stable estimate.
+        x_arm = float(np.mean([bx for _, bx, _ in self._detection_buffer]))
+        y_arm = float(np.mean([by for _, _, by in self._detection_buffer]))
+        best_det = self._detection_buffer[-1][0]
+        self._detection_buffer = []
+
         z_arm = BLOCK_Z_MM
+        theta_deg = float(np.degrees(np.arctan2(y_arm, x_arm)))
 
         self._holding_block = False
-        self._target = best
+        self._target = best_det
         self._target_arm = (x_arm, y_arm, z_arm)
 
-        print(f"[STACKER] Target: {best['color']} block at arm frame "
-              f"({x_arm:.1f}, {y_arm:.1f}, {z_arm:.1f}) mm via {source}")
+        print(f"[STACKER] Target: {best_det['color']} block at "
+              f"({x_arm:.1f}, {y_arm:.1f}, {z_arm:.1f}) mm  theta={theta_deg:.1f} deg")
 
-        self._set_waypoint(x_arm, y_arm, TRAVEL_Z_MM, gamma=-np.pi / 4)
+        # Side-approach: position the arm radially outside the block at grip height.
+        # DESCEND will then slide horizontally inward to block_x, block_y at the same Z.
+        dist = float(np.hypot(x_arm, y_arm))
+        if dist > 1e-3:
+            ux, uy = x_arm / dist, y_arm / dist  # unit vector toward block
+        else:
+            ux, uy = 1.0, 0.0
+        approach_x = x_arm + ux * SIDE_APPROACH_OFFSET_MM
+        approach_y = y_arm + uy * SIDE_APPROACH_OFFSET_MM
+        self._set_waypoint(approach_x, approach_y, BLOCK_Z_MM, gamma=-np.pi / 4)
+        if self._waypoint is None:
+            # Fallback: try with gamma=-pi/2
+            self._set_waypoint(approach_x, approach_y, BLOCK_Z_MM, gamma=-np.pi / 2)
         if self._waypoint is None:
             self._abort_cycle("pickup waypoint has no IK solution")
             return
@@ -103,8 +179,16 @@ class BlockStacker:
     def _handle_grip(self):
         if self._dwell_until is None:
             self.gripper_pos = GRIPPER_CLOSED
-            self._dwell_until = time.monotonic() + 1.5
-            print("[STACKER] Gripping...")
+            self._dwell_until = time.monotonic() + 0.5
+            # Print actual vs intended position — use this to tune LOCALIZE_X/Y_OFFSET_MM.
+            pose, _, _ = self.arm_math.forward_kinematics(self.arm.positionMeasured)
+            actual_xyz = np.array(pose[:3], dtype=float) * 1000.0
+            tx, ty, tz = self._target_arm
+            print(f"[STACKER] Gripping...  "
+                  f"actual=({actual_xyz[0]:.1f}, {actual_xyz[1]:.1f}, {actual_xyz[2]:.1f}) mm  "
+                  f"target=({tx:.1f}, {ty:.1f}, {tz:.1f}) mm  "
+                  f"XY-err=({actual_xyz[0]-tx:.1f}, {actual_xyz[1]-ty:.1f}) mm  "
+                  f"[tune LOCALIZE_X/Y_OFFSET_MM to correct]")
 
         self._command_active_waypoint()
 
@@ -183,6 +267,12 @@ class BlockStacker:
         x, y, z = self._target_arm if self._target_arm else (TOWER_X_MM, TOWER_Y_MM, TOWER_Z_MM)
 
         if next_state == self.DESCEND:
+            # Horizontal slide-in at grip height: use gamma=-pi/4 to match approach angle.
+            self._set_waypoint(x, y, z, gamma=-np.pi / 4)
+            if self._waypoint is not None:
+                return True
+            # Fallback: straight-down wrist angle.
+            print("[STACKER] gamma=-pi/4 DESCEND has no IK, trying gamma=-pi/2")
             self._set_waypoint(x, y, z, gamma=-np.pi / 2)
             return self._waypoint is not None
 
@@ -227,9 +317,17 @@ class BlockStacker:
         print(f"[STACKER] ERROR: {reason} - aborting cycle")
         self.gripper_pos = GRIPPER_OPEN
         self._holding_block = False
+        self._dwell_until = None
+
+        # Remember this position so we don't immediately retry an unreachable block.
+        if self._target_arm is not None:
+            fx, fy, _ = self._target_arm
+            expiry = time.monotonic() + 20.0
+            self._failed_positions.append((fx, fy, expiry))
+            print(f"[STACKER] Position ({fx:.1f}, {fy:.1f}) blacklisted for 20 s")
+
         self._target = None
         self._target_arm = None
-        self._dwell_until = None
         
         pose, _, _ = self.arm_math.forward_kinematics(self.arm.positionMeasured)
         # FIX: Multiply by 1000 so we don't try to move inside the base
@@ -287,8 +385,8 @@ class BlockStacker:
             return None, "ray-plane"
 
         block_pos = pose_mm + t * ray_arm
-        x_arm = float(block_pos[0])
-        y_arm = float(block_pos[1])
+        x_arm = float(block_pos[0]) + LOCALIZE_X_OFFSET_MM
+        y_arm = float(block_pos[1]) + LOCALIZE_Y_OFFSET_MM
         return (x_arm, y_arm), "ray-plane"
 
     def _transition(self, new_state: str):
