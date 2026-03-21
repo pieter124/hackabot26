@@ -11,6 +11,7 @@ from pal.utilities.vision import Camera2D
 
 class QArmMini():
 
+
     HOME_POSE  = np.array([0, np.pi / 2, -np.pi / 2, np.pi / 2], dtype=np.float64)
     SLEEP_POSE = np.array([0, 0, 0, np.pi / 2], dtype=np.float64)
 
@@ -244,10 +245,11 @@ class QArmMini():
         Args:
              gripper (float): commanded joint position (%) [0-1]
         """
+        print("moving gripper")
         gripperPWM = np.array([gripperPWM])
         np.clip(gripperPWM, -1, 1, out = gripperPWM)
 
-        writeChannels = self.WRITE_OTHER_CHANNELS[9]
+        writeChannels = np.array([self.WRITE_OTHER_CHANNELS[9]], dtype=np.uint32)
 
         try:
             self.card.write_other(
@@ -423,56 +425,56 @@ class QArmMini():
         self.terminate()
 
 
-# class QArmMiniCamera(Camera2D):
+class QArmMiniCamera(Camera2D):
 
-#     """Class for accessing the QBot Platform CSI camera.
+    """Class for accessing the QBot Platform CSI camera.
 
-#     Args:
-#         frameWidth (int, optional): Width of the camera frame.
-#             Defaults to 640.
-#         frameHeight (int, optional): Height of the camera frame.
-#             Defaults to 400.
-#         frameRate (int, optional): Frame rate of the camera.
-#             Defaults to 30.
+    Args:
+        frameWidth (int, optional): Width of the camera frame.
+            Defaults to 640.
+        frameHeight (int, optional): Height of the camera frame.
+            Defaults to 400.
+        frameRate (int, optional): Frame rate of the camera.
+            Defaults to 30.
 
-#     """
+    """
 
-#     def __init__(
+    def __init__(
 
-#             self,
-#             frameWidth=640,
-#             frameHeight=400,
-#             frameRate=60.0,
-#             focalLength=np.array([[None], [None]], dtype=np.float64),
-#             principlePoint=np.array([[None], [None]], dtype=np.float64),
-#             skew=None,
-#             position=np.array([[None], [None], [None]], dtype=np.float64),
-#             orientation=np.array(
-#                 [[None,None,None], [None,None,None], [None,None,None]],
-#                 dtype=np.float64),
-#             brightness = None, #won't work on qbot platform downward facing
-#             contrast = None, #won't work on qbot platform downward facing
-#             gain = None,
-#             exposure = None,
-#         ):
+            self,
+            frameWidth=640,
+            frameHeight=400,
+            frameRate=60.0,
+            focalLength=np.array([[None], [None]], dtype=np.float64),
+            principlePoint=np.array([[None], [None]], dtype=np.float64),
+            skew=None,
+            position=np.array([[None], [None], [None]], dtype=np.float64),
+            orientation=np.array(
+                [[None,None,None], [None,None,None], [None,None,None]],
+                dtype=np.float64),
+            brightness = None, #won't work on qbot platform downward facing
+            contrast = None, #won't work on qbot platform downward facing
+            gain = None,
+            exposure = None,
+        ):
 
-#         if IS_PHYSICAL_QBOTPLATFORM:
-#             deviceId = '6'
-#         else:
-#             deviceId = "6@tcpip://localhost:18915"
-#         super().__init__(
-#             cameraId=deviceId,
-#             frameWidth=frameWidth,
-#             frameHeight=frameHeight,
-#             frameRate=frameRate,
-#             focalLength = focalLength,
-#             principlePoint = principlePoint,
-#             skew = skew,
-#             position=position,
-#             orientation=orientation,
-#             imageFormat=1,
-#             brightness = brightness,
-#             contrast = contrast,
-#             gain = gain,
-#             exposure = exposure
-#         )
+        if 1 == 2 :
+            deviceId = '6'
+        else:
+            deviceId = "6@tcpip://localhost:18915"
+        super().__init__(
+            cameraId=deviceId,
+            frameWidth=frameWidth,
+            frameHeight=frameHeight,
+            frameRate=frameRate,
+            focalLength = focalLength,
+            principlePoint = principlePoint,
+            skew = skew,
+            position=position,
+            orientation=orientation,
+            imageFormat=1,
+            brightness = brightness,
+            contrast = contrast,
+            gain = gain,
+            exposure = exposure
+        )
