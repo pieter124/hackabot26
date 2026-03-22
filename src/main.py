@@ -9,6 +9,7 @@ from pal.products.qarm_mini import QArmMini
 from hal.content.qarm_mini import QArmMiniKeyboardNavigator, QArmMiniFunctions
 from pal.utilities.keyboard import QKeyboard
 from pal.utilities.timing   import QTimer
+from vision import detect_blocks, estimate_3d_position, get_frame
 
 
 # CONSTANTS
@@ -27,11 +28,17 @@ myMiniArm   = QArmMini(hardware=1, id=4)
 kbdNav      = QArmMiniKeyboardNavigator(keyboard=kbd, initialPose=myMiniArm.HOME_POSE)
 myArmMath   = QArmMiniFunctions()
 timer       = QTimer(sampleRate=30.0, totalTime=300.0)
-    
+cap = cv2.VideoCapture(1)
+
 # Main tower-stacking loop
 
 def stack(positions, ctrl):
     current_height = 0
+    frame = get_frame(cap)
+    while True:
+        cv2.imshow("Main", frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
     # 1. Initialize Pose
     ctrl.init_pose()
     print("init pos")
@@ -63,7 +70,8 @@ def stack(positions, ctrl):
         ctrl.ascend()
 
         # 5. Hover to Tower (Drop-off point)
-        if ctrl.hover_to(TOWER_X, TOWER_Y, TOWER_HEIGHT + (BLOCK_HEIGHT * current_height + 0.01)) == ctrl.FAILED:
+        additive = BLOCK_HEIGHT * current_height + 0.0075 if current_height != 0 else 0
+        if ctrl.hover_to(TOWER_X, TOWER_Y, TOWER_HEIGHT + (additive)) == ctrl.FAILED:
             print(f"[MAIN] ERROR: No IK solution for tower at ({TOWER_X}, {TOWER_Y}, {TOWER_HEIGHT}).")
 
         # 6. Release the block
