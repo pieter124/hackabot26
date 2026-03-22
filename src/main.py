@@ -3,23 +3,29 @@ import sys, os
 import cv2
 import time
 import numpy as np
+import multiprocessing
 from control import Control
 from preprocess import preprocess_positions
 from pal.products.qarm_mini import QArmMini
 from hal.content.qarm_mini import QArmMiniKeyboardNavigator, QArmMiniFunctions
 from pal.utilities.keyboard import QKeyboard
 from pal.utilities.timing   import QTimer
-from vision import detect_blocks, estimate_3d_position, get_frame
+from vision import detect_blocks_and_prongs, get_frame, load_camera_calibration, estimate_3d_position, VISION_CENTRE,calculate_camera_delta_mm
 
 
 # CONSTANTS
 TOWER_HEIGHT = 0.0001
 TOWER_X = 0
 TOWER_Y = 0.2
-BLOCK_HEIGHT = 0.04
+BLOCK_HEIGHT = 0.042
+STACK_CLEARANCE = 0.003
+SAFE_Z = 0.15
+TABLE_Z = 0.005
 
 SCAN_ERROR_THRESHOLD = 0.01
 SCAN_ERROR_TIMEOUT = 8 
+RETRACT_BASE   = 0.055
+RETRACT_SCALE  = 0.01 
 
 
 # SETUP
@@ -28,51 +34,149 @@ myMiniArm   = QArmMini(hardware=1, id=4)
 kbdNav      = QArmMiniKeyboardNavigator(keyboard=kbd, initialPose=myMiniArm.HOME_POSE)
 myArmMath   = QArmMiniFunctions()
 timer       = QTimer(sampleRate=30.0, totalTime=300.0)
-cap = cv2.VideoCapture(1)
 
-# Main tower-stacking loop
+
+def vision_loop(detections_queue, cam_mtx, cam_dist,refinement, ref_queue, height_queue):
+    cap = cv2.VideoCapture(1)
+    
+    while True:
+        frame = get_frame(cap, cam_mtx, cam_dist)
+        if frame is not None:
+            annotated, detections, _ = detect_blocks_and_prongs(frame)
+            
+            # Draw the static target crosshair on screen
+            cv2.drawMarker(annotated, VISION_CENTRE, (0, 255, 255), 
+                           cv2.MARKER_CROSS, 20, 2)
+
+            # Replace queue contents with latest detections (non-blocking)
+            while not detections_queue.empty():
+                try:
+                    detections_queue.get_nowait()
+                except:
+                    pass
+            
+            # Proceed only if we actually detected something
+            if detections:
+                det = detections[0]
+                
+                if refinement.is_set():
+                    # 1. Get the depth (Z) of the block
+                    if height_queue.empty():
+                       depth_guess = 0.07
+                    else:              
+                        depth_guess = height_queue.get() - BLOCK_HEIGHT
+                        height_queue.put(depth_guess)
+                    # 2. Calculate the alignment delta
+                    dx_mm, dy_mm = calculate_camera_delta_mm(det, cam_mtx, depth_guess)
+
+                    # 3. Send the delta to the robot logic
+                    ref_queue.put((dx_mm,dy_mm,0))
+                    
+                    # Debug Visual: Draw a line from vision center to the block
+                    cv2.line(annotated, VISION_CENTRE, (det["cx"], det["cy"]), (255, 0, 255), 2)
+                    cv2.putText(annotated, f"dx: {dx_mm:.1f}mm, dy: {dy_mm:.1f}mm", 
+                                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
+                else:
+                    # Get initial pose estimates
+                    detections_queue.put(det)
+            
+            cv2.imshow("Vision", annotated)
+            
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+            
+    cap.release()
+    cv2.destroyAllWindows()
+
 
 def stack(positions, ctrl):
     current_height = 0
-    frame = get_frame(cap)
-    while True:
-        cv2.imshow("Main", frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+
     # 1. Initialize Pose
     ctrl.init_pose()
     print("init pos")
-    time.sleep(0.3)
+    time.sleep(1.5)
     good_z = positions[0][2]
-    for i, position in enumerate(positions):
-        x, y, z = position
+    
+    
+    # for i, (x, y, z) in enumerate(positions):
+    i = 0
+    while True:
+        refinement.clear()
+        if detections_queue.empty():
+            time.sleep(0.1)
+            continue
+        det = detections_queue.get()
+        _, R_ee, _ = myArmMath.forward_kinematics(ctrl._coord)
+        x, y, z = estimate_3d_position(det, CAM_MTX, ee_rotation=R_ee)
         print(f"\n[MAIN] --- Starting sequence for block {i+1} at ({x}, {y}, {z}) ---")
 
-        ctrl.ascend()
+        while not height_queue.empty():
+            height_queue.get_nowait()
+        height = ctrl.ascend()
+        print(f"[MAIN] Current height after ascend: {height:.3f}m")
+        height_queue.put(height)
 
         
         # 2. Hover over block
         if ctrl.hover_to(x, y) == ctrl.FAILED:
             print(f"[MAIN] ERROR: No IK solution to hover at ({x}, {y}). Skipping block.")
             continue
+        placed = False
+        refinement.set()
+        while not placed:
+            if ref_queue.empty():
+                time.sleep(0.1)
+                continue
+
+            dx,dy,_ = ref_queue.get()
+            new_x = x + dx / 500
+            new_y = y + dy / 500
+            print(f"[MAIN] Refinement delta received: dx={dx:.1f}mm, dy={dy:.1f}mm -> New target: ({new_x:.4f}, {new_y:.4f})")
+            if ctrl.hover_to(new_x, new_y) == ctrl.FAILED:
+                print(f"[MAIN] ERROR: No IK solution to hover at ({new_x}, {new_y}). Skipping block.")
+                
+            if abs(dx) < 10 and abs(dy) < 10:
+                placed = True
+        else:
+            continue
 
         # 3. Descend to block
-        if ctrl.descend(good_z) == ctrl.FAILED:
+        if ctrl.descend(TABLE_Z) == ctrl.FAILED:
             print(f"[MAIN] ERROR: Failed to descend to {z}. Skipping block.")
             continue
 
-        time.sleep(2) 
+        time.sleep(2.5) 
         # 4. Grip the block
         ctrl.grip()
         # Gripping is usually instantaneous, but a short sleep or wait is safe
         time.sleep(0.7)
 
-        ctrl.ascend()
+        
 
         # 5. Hover to Tower (Drop-off point)
-        additive = BLOCK_HEIGHT * current_height + 0.0075 if current_height != 0 else 0
-        if ctrl.hover_to(TOWER_X, TOWER_Y, TOWER_HEIGHT + (additive)) == ctrl.FAILED:
+        drop_z = TOWER_HEIGHT + (BLOCK_HEIGHT * current_height) + STACK_CLEARANCE
+        retract_offset = RETRACT_BASE + RETRACT_SCALE * current_height
+
+        retract_x = TOWER_X 
+        retract_y = TOWER_Y - retract_offset      
+
+        ctrl.ascend()
+        
+        if ctrl.hover_to_safe(retract_x, retract_y, SAFE_Z) == ctrl.FAILED:
+            print(f"[MAIN] ERROR: Could not reach retract position.")
+            continue
+        time.sleep(0.5)
+
+        if ctrl.descend(drop_z) == ctrl.FAILED:
+            print(f"[MAIN] ERROR: Could not descend to drop_z={drop_z:.4f}. Skipping.")
+            continue
+        print(f"[MAIN] Joints after descend (block {i+1}): {np.round(ctrl._coord, 3)}")
+
+        time.sleep(0.5)
+        if ctrl.hover_to(TOWER_X, TOWER_Y, drop_z) == ctrl.FAILED:
             print(f"[MAIN] ERROR: No IK solution for tower at ({TOWER_X}, {TOWER_Y}, {TOWER_HEIGHT}).")
+            continue
 
         # 6. Release the block
         time.sleep(0.5)
@@ -83,9 +187,11 @@ def stack(positions, ctrl):
 
         current_height += 1
         print(f"[MAIN] Successfully stacked block {i+1}.")
-            
-      
-      
+        i += 1
+
+        ctrl.init_pose()
+        time.sleep(1.5)
+
 def test_vision_estimate():
     '''Tests the depth based vision estimate'''
     # load robot camera
@@ -129,11 +235,20 @@ def test_harness(file:str, ctrl:Control):
             elif status == ctrl.BUSY:
                 print(f"[TEST] Arm busy, forcing reset for ({x}, {y}, {z})")
                 ctrl.hover_to(x, y) # Try one more time after reset
+        
                 
 
 if __name__ == "__main__":
-    # Get positions of blocks
-    ctrl, positions = Control(myArmMath, myMiniArm), preprocess_positions
+    CAM_MTX, CAM_DIST = load_camera_calibration("camera_calibration.npz")
+    refinement = multiprocessing.Event()
+    detections_queue = multiprocessing.Queue()
+    ref_queue = multiprocessing.Queue()
+    height_queue = multiprocessing.Queue()
+    vision_process = multiprocessing.Process(
+        target=vision_loop, args=(detections_queue, CAM_MTX, CAM_DIST,refinement,ref_queue,height_queue), daemon=True
+    )
+    vision_process.start()
+    ctrl = Control(myArmMath, myMiniArm)
     ctrl.init_pose()
 
     with open("positions.csv", "r") as file:
@@ -142,12 +257,15 @@ if __name__ == "__main__":
         next(position_reader)
         for row in position_reader:
             positions.append((float(row[1]), float(row[2]), float(row[3])))
-    
+
     try:
         stack(positions, ctrl)
-        #test_harness("positions.csv", ctrl)
     except KeyboardInterrupt:
         print("[MAIN] Program interrupted...")
+    finally:
+        vision_process.terminate()
+        vision_process.join()
+        print("[MAIN] Vision process stopped.")
 
     # test_vision_estimate()
     

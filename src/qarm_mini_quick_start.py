@@ -14,7 +14,7 @@ from hal.content.qarm_mini import QArmMiniKeyboardNavigator, QArmMiniFunctions
 from pal.utilities.keyboard import QKeyboard
 from pal.utilities.timing   import QTimer
 
-from vision import detect_blocks, estimate_3d_position
+from vision import detect_blocks_and_prongs, estimate_3d_position
 
 # Load camera calibration if available
 _calib_file = os.path.join(os.path.dirname(__file__), "camera_calibration.npz")
@@ -43,7 +43,7 @@ def toggle_gripper(gripper_pos):
 # -- Section A: Setup --
 kbd         = QKeyboard()
 myMiniArm   = QArmMini(hardware=1, id=4)
-kbdNav      = QArmMiniKeyboardNavigator(keyboard=kbd, initialPose=myMiniArm.HOME_POSE)
+kbdNav      = QArmMiniKeyboardNavigator(keyboard=kbd, initialPose=[0, 1.3*np.pi/2, -np.pi/2, 0])
 myArmMath   = QArmMiniFunctions()
 timer       = QTimer(sampleRate=30.0, totalTime=300.0)
 
@@ -71,7 +71,7 @@ try:
             if CAM_MTX is not None:
                 frame = cv2.undistort(frame, CAM_MTX, CAM_DIST)
             # Show the video feed in a window
-            annotated, detections = detect_blocks(frame)
+            annotated, detections, _ = detect_blocks_and_prongs(frame)
 
             # Print any new detections to the terminal
             # for d in detections:
