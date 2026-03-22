@@ -20,11 +20,7 @@ COLOR_RANGES = {
     ],
     "blue": [
         (np.array([100, 80,  40]),   np.array([130, 255, 255])),
-    ],
-    "black": [
-        (np.array([0, 0, 0]), np.array([180, 255, 50])),
-    ]
-}
+    ]}
 
 BOX_COLORS = {
     "red":   (0,   0,   255),
@@ -280,7 +276,7 @@ def calculate_camera_delta_mm(det, cam_mtx, Z):
     dy_px = det["cy"] - VISION_CENTRE[1]
     # print(f"[VISION] Pixel delta: dx={dx_px:.1f}px, dy={dy_px:.1f}px at estimated depth Z={Z:.3f}m")
     # Convert to physical mm
-    dx_mm = (dx_px * 20) / fx
-    dy_mm = (dy_px * 20) / fy
+    dx_mm = (dx_px * Z*100) / fx
+    dy_mm = (dy_px * Z*100) / fy
     
     return dx_mm, dy_mm

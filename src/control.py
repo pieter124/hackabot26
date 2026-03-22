@@ -104,7 +104,8 @@ class Control:
             if (self._timer.get_current_time() - scan_start) >= SCAN_ERROR_TIME_OUT:
                 break
             self._timer.sleep()
-        return self.SUCCESS
+        arm_height = self.ee_position_m(self.arm.positionMeasured)[2]
+        return arm_height
 
 
     def descend(self, pick_up_height):

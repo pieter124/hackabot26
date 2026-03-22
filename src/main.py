@@ -70,6 +70,8 @@ def vision_loop(detections_queue, cam_mtx, cam_dist,refinement, ref_queue, heigh
                     dx_mm, dy_mm = calculate_camera_delta_mm(det, cam_mtx, depth_guess)
 
                     # 3. Send the delta to the robot logic
+                    while not ref_queue.empty():
+                            ref_queue.get_nowait()
                     ref_queue.put((dx_mm,dy_mm,0))
                     
                     # Debug Visual: Draw a line from vision center to the block
@@ -124,24 +126,31 @@ def stack(positions, ctrl):
             continue
         placed = False
         refinement.set()
+        new_x, new_y = x, y
         while not placed:
             if ref_queue.empty():
                 time.sleep(0.1)
                 continue
 
             dx,dy,_ = ref_queue.get()
-            new_x = x + dx / 500
-            new_y = y + dy / 500
+            new_x = x+  dx / 1000
+            new_y = y+  dy / 1000
+            # call hover_to with new_x, new_y, and maintain current z
+            pos, _, _ = ctrl.arm_math.forward_kinematics(ctrl.arm.positionMeasured)
             print(f"[MAIN] Refinement delta received: dx={dx:.1f}mm, dy={dy:.1f}mm -> New target: ({new_x:.4f}, {new_y:.4f})")
-            if ctrl.hover_to(new_x, new_y) == ctrl.FAILED:
+            if res:= ctrl.hover_to(new_x, new_y, pos[2]) == ctrl.FAILED:
                 print(f"[MAIN] ERROR: No IK solution to hover at ({new_x}, {new_y}). Skipping block.")
-                
-            if abs(dx) < 10 and abs(dy) < 10:
+            else:
+                while not height_queue.empty():
+                    height_queue.get_nowait()
+                height_queue.put(res)
+                x = new_x
+                y = new_y
+            if abs(dx) < 5 and abs(dy) < 5:
                 placed = True
-        else:
-            continue
 
         # 3. Descend to block
+        input("Press Enter to descend...")
         if ctrl.descend(TABLE_Z) == ctrl.FAILED:
             print(f"[MAIN] ERROR: Failed to descend to {z}. Skipping block.")
             continue
