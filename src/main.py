@@ -12,7 +12,7 @@ from pal.utilities.timing   import QTimer
 
 
 # CONSTANTS
-TOWER_HEIGHT = 0.001
+TOWER_HEIGHT = 0.0001
 TOWER_X = 0
 TOWER_Y = 0.2
 BLOCK_HEIGHT = 0.04
@@ -36,6 +36,7 @@ def stack(positions, ctrl):
     ctrl.init_pose()
     print("init pos")
     time.sleep(0.3)
+    good_z = positions[0][2]
     for i, position in enumerate(positions):
         x, y, z = position
         print(f"\n[MAIN] --- Starting sequence for block {i+1} at ({x}, {y}, {z}) ---")
@@ -49,20 +50,20 @@ def stack(positions, ctrl):
             continue
 
         # 3. Descend to block
-        if ctrl.descend(z) == ctrl.FAILED:
+        if ctrl.descend(good_z) == ctrl.FAILED:
             print(f"[MAIN] ERROR: Failed to descend to {z}. Skipping block.")
             continue
 
-        time.sleep(0.5) 
+        time.sleep(2) 
         # 4. Grip the block
         ctrl.grip()
         # Gripping is usually instantaneous, but a short sleep or wait is safe
-        time.sleep(0.5)
+        time.sleep(0.7)
 
         ctrl.ascend()
 
         # 5. Hover to Tower (Drop-off point)
-        if ctrl.hover_to(TOWER_X, TOWER_Y, TOWER_HEIGHT + (BLOCK_HEIGHT * current_height + 0.02)) == ctrl.FAILED:
+        if ctrl.hover_to(TOWER_X, TOWER_Y, TOWER_HEIGHT + (BLOCK_HEIGHT * current_height + 0.01)) == ctrl.FAILED:
             print(f"[MAIN] ERROR: No IK solution for tower at ({TOWER_X}, {TOWER_Y}, {TOWER_HEIGHT}).")
 
         # 6. Release the block

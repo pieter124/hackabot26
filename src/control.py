@@ -67,13 +67,19 @@ class Control:
         scan_start = self._timer.get_current_time()
         scan_err_mm = np.inf
         scan_pose_xyz = self.ee_position_m(self._coord)
+
+        stable_ticks = 0
         # from proto stacker
         while self._timer.check():
             self.arm.read_write_std(self._coord, self.gripper_position)
             measured_xyz = self.ee_position_m(self.arm.positionMeasured)
             scan_err_mm = float(np.linalg.norm(measured_xyz - scan_pose_xyz))
             if scan_err_mm <= SCAN_ERROR_THRESHOLD:
-                break
+                stable_ticks += 1
+                if stable_ticks >= REQUIRED_STABLE_TICKS:
+                    break
+            else:
+                stable_ticks = 0
             if (self._timer.get_current_time() - scan_start) >= SCAN_ERROR_TIME_OUT:
                 break
             self._timer.sleep()
@@ -105,7 +111,7 @@ class Control:
         # use a while loop and try, except with small increments to go up as high as possible until we hit an IK failure, then stop at the last valid position
         pose, _, _ = self.arm_math.forward_kinematics(self._coord)
         x, y, z = pose[0], pose[1], pose[2]
-        i = 0.01
+        i = 0.005
         while True:
             _, _, num_sol, theta_opt = self.arm_math.inverse_kinematics((x, y, z + i), GAMMA, self._coord)
             if num_sol < 1:
