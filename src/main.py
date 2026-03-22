@@ -18,13 +18,14 @@ TOWER_HEIGHT = 0.0001
 TOWER_X = 0
 TOWER_Y = 0.2
 BLOCK_HEIGHT = 0.042
-STACK_CLEARANCE = 0.003
+STACK_CLEARANCE = 0.004
+
 SAFE_Z = 0.15
 TABLE_Z = 0.005
 
 SCAN_ERROR_THRESHOLD = 0.01
 SCAN_ERROR_TIMEOUT = 8 
-RETRACT_BASE   = 0.055
+RETRACT_BASE   = 0.045
 RETRACT_SCALE  = 0.01 
 
 
@@ -72,7 +73,10 @@ def vision_loop(detections_queue, cam_mtx, cam_dist,refinement, ref_queue, heigh
 
                     # 3. Send the delta to the robot logic
                     while not ref_queue.empty():
+                        try:
                             ref_queue.get_nowait()
+                        except:
+                            pass
                     ref_queue.put((dx_mm,dy_mm,0))
                     
                     # Debug Visual: Draw a line from vision center to the block
@@ -122,7 +126,7 @@ def stack(positions, ctrl):
 
         
         # 2. Hover over block
-        if ctrl.hover_to(x, y) == ctrl.FAILED:
+        if ctrl.hover_to(x*0.8, y*0.8) == ctrl.FAILED:
             print(f"[MAIN] ERROR: No IK solution to hover at ({x}, {y}). Skipping block.")
             continue
         placed = False
@@ -135,12 +139,13 @@ def stack(positions, ctrl):
                 continue
 
             dx,dy,_ = ref_queue.get()
-            new_x = x+  dx / 1000
-            new_y = y+  dy / 1000
+            new_x = x - dy / 1000
+            new_y = y - dx / 1000
             # call hover_to with new_x, new_y, and maintain current z
             pos, _, _ = ctrl.arm_math.forward_kinematics(ctrl.arm.positionMeasured)
             print(f"[MAIN] Refinement delta received: dx={dx:.1f}mm, dy={dy:.1f}mm -> New target: ({new_x:.4f}, {new_y:.4f})")
-            if res:= ctrl.hover_to(new_x, new_y, pos[2]) == ctrl.FAILED:
+            res = ctrl.hover_to(new_x, new_y, pos[2])
+            if res == ctrl.FAILED:
                 print(f"[MAIN] ERROR: No IK solution to hover at ({new_x}, {new_y}). Skipping block.")
             else:
                 while not height_queue.empty():
@@ -148,12 +153,12 @@ def stack(positions, ctrl):
                 height_queue.put(res)
                 x = new_x
                 y = new_y
-            if abs(dx) < 7 and abs(dy) < 7:
+            if abs(dx) < 5 and abs(dy) < 5:
                 placed = True
             else:
                 attempts += 1
                 if attempts > 5:
-                    ctrl.ascend()
+                    ctrl.init_pose()
                     break
         
         if not placed:
@@ -161,7 +166,6 @@ def stack(positions, ctrl):
             continue
 
         # 3. Descend to block
-        input("Press Enter to descend...")
         if ctrl.descend(TABLE_Z) == ctrl.FAILED:
             print(f"[MAIN] ERROR: Failed to descend to {z}. Skipping block.")
             continue
@@ -188,12 +192,7 @@ def stack(positions, ctrl):
             continue
         time.sleep(0.5)
 
-        if ctrl.descend(drop_z) == ctrl.FAILED:
-            print(f"[MAIN] ERROR: Could not descend to drop_z={drop_z:.4f}. Skipping.")
-            continue
-        print(f"[MAIN] Joints after descend (block {i+1}): {np.round(ctrl._coord, 3)}")
 
-        time.sleep(0.5)
         if ctrl.hover_to(TOWER_X, TOWER_Y, drop_z) == ctrl.FAILED:
             print(f"[MAIN] ERROR: No IK solution for tower at ({TOWER_X}, {TOWER_Y}, {TOWER_HEIGHT}).")
             continue

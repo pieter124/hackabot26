@@ -7,7 +7,7 @@ import numpy as np
 
 # CONSTANTS
 RADIUS = 0.29
-GAMMA = -np.pi/3
+GAMMA = -2*np.pi/5
 SAFE_Z = 0.15
 OPEN_GRIP= 0.0
 CLOSED_GRIP = 0.52
@@ -201,17 +201,6 @@ class Control:
         pose, _, _ = self.arm_math.forward_kinematics(self._coord)
         x, y, z = pose[0], pose[1], pose[2]
 
-        if abs(x - TOWER_X) < 0.05 and abs(y - TOWER_Y) < 0.05:
-            print(f"[CONTROL/ASCEND] Near tower, pulling back before ascend")
-            _, _, num_sol, theta_opt = self.arm_math.inverse_kinematics(
-                (x, y - 0.04, z), GAMMA, self._coord)
-            if num_sol > 0:
-                self._coord = theta_opt
-                self.arm.read_write_std(self._coord, self.gripper_position)
-                time.sleep(OPERATION_RATE * 0.5)
-                pose, _, _ = self.arm_math.forward_kinematics(self._coord)
-                x, y, z = pose[0], pose[1], pose[2]
-    
         i = 0.005
         while True:
             _, _, num_sol, theta_opt = self.arm_math.inverse_kinematics((x, y, z + i), GAMMA, self._coord)
