@@ -63,9 +63,10 @@ def vision_loop(detections_queue, cam_mtx, cam_dist,refinement, ref_queue, heigh
                     # 1. Get the depth (Z) of the block
                     if height_queue.empty():
                        depth_guess = 0.07
-                    else:              
-                        depth_guess = height_queue.get() - BLOCK_HEIGHT
-                        height_queue.put(depth_guess)
+                    else:
+                        height = height_queue.get()
+                        height_queue.put(height)          # put back unchanged
+                        depth_guess = height - BLOCK_HEIGHT
                     # 2. Calculate the alignment delta
                     dx_mm, dy_mm = calculate_camera_delta_mm(det, cam_mtx, depth_guess)
 
@@ -127,6 +128,7 @@ def stack(positions, ctrl):
         placed = False
         refinement.set()
         new_x, new_y = x, y
+        attempts = 0
         while not placed:
             if ref_queue.empty():
                 time.sleep(0.1)
@@ -146,8 +148,17 @@ def stack(positions, ctrl):
                 height_queue.put(res)
                 x = new_x
                 y = new_y
-            if abs(dx) < 5 and abs(dy) < 5:
+            if abs(dx) < 7 and abs(dy) < 7:
                 placed = True
+            else:
+                attempts += 1
+                if attempts > 5:
+                    ctrl.ascend()
+                    break
+        
+        if not placed:
+            print(f"[MAIN] Failed to refine position after {attempts} attempts. Moving to next block.")
+            continue
 
         # 3. Descend to block
         input("Press Enter to descend...")
@@ -167,12 +178,12 @@ def stack(positions, ctrl):
         drop_z = TOWER_HEIGHT + (BLOCK_HEIGHT * current_height) + STACK_CLEARANCE
         retract_offset = RETRACT_BASE + RETRACT_SCALE * current_height
 
-        retract_x = TOWER_X 
-        retract_y = TOWER_Y - retract_offset      
+        retract_x = TOWER_X - retract_offset
+        retract_y = TOWER_Y     
 
         ctrl.ascend()
         
-        if ctrl.hover_to_safe(retract_x, retract_y, SAFE_Z) == ctrl.FAILED:
+        if ctrl.hover_to(retract_x, retract_y, SAFE_Z) == ctrl.FAILED:
             print(f"[MAIN] ERROR: Could not reach retract position.")
             continue
         time.sleep(0.5)

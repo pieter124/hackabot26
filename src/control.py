@@ -7,7 +7,7 @@ import numpy as np
 
 # CONSTANTS
 RADIUS = 0.29
-GAMMA = -np.pi/2
+GAMMA = -np.pi/3
 SAFE_Z = 0.15
 OPEN_GRIP= 0.0
 CLOSED_GRIP = 0.52
@@ -68,28 +68,42 @@ class Control:
 
 
     def hover_to(self, x, y, z=None) -> str:
-        """In meters"""        
+        """In meters"""
         print(max(0, RADIUS**2 - x**2 - y**2))
         position = self.ee_position_m(self.arm.positionMeasured)
         if z is None:
-            z = SAFE_Z  # maintain current z if not specified
+            z = SAFE_Z
 
-        i = 0.01
+        x_start, y_start, z_start = position[0], position[1], position[2]
+
+        # Verify IK exists at target before committing to the move
+        i = 0.005
         _, _, num_sol, theta_opt = self.arm_math.inverse_kinematics((x, y, z), GAMMA, self._coord)
         while num_sol < 1:
-            _, _, num_sol, theta_opt = self.arm_math.inverse_kinematics((x, y, z-i), GAMMA, self._coord)
+            _, _, num_sol, theta_opt = self.arm_math.inverse_kinematics((x, y, z - i), GAMMA, self._coord)
             print(f"[CONTROL] No solutions for x:{x} y:{y} z:{z-i}")
-            i += 0.01
+            i += 0.005
             if i > 0.15:
                 return self.FAILED
+        z -= (i - 0.005)  # use the last valid z
 
-        self._coord = theta_opt
+        # Cartesian-space interpolation from current position to target
+        for step in range(1, STEPS + 1):
+            t = step / STEPS
+            x_i = x_start + (x - x_start) * t
+            y_i = y_start + (y - y_start) * t
+            z_i = z_start + (z - z_start) * t
+            _, _, num_sol, theta_opt = self.arm_math.inverse_kinematics((x_i, y_i, z_i), GAMMA, self._coord)
+            if num_sol < 1:
+                continue
+            self._coord = theta_opt
+            self.arm.read_write_std(self._coord, self.gripper_position)
+            time.sleep(OPERATION_RATE / STEPS)
 
         scan_err_mm = np.inf
         scan_pose_xyz = self.ee_position_m(self._coord)
 
         stable_ticks = 0
-        # from proto stacker
         scan_start = self._timer.get_current_time()
         while self._timer.check():
             self.arm.read_write_std(self._coord, self.gripper_position)
@@ -112,19 +126,18 @@ class Control:
         # maintain x, y and reduce z to pick-up height
         pose, _, _ = self.arm_math.forward_kinematics(self._coord)
         x, y, z_start = pose[0], pose[1], pose[2]
-        
+
         for i in range(1, STEPS + 1):
             z = z_start + (pick_up_height - z_start) * i / STEPS
             _, _, num_sol, theta_opt = self.arm_math.inverse_kinematics((x, y, z), GAMMA, self._coord)
 
-            
             if num_sol < 1:
                 print(f"No IK solution at step {i} for position ({x}, {y}, {z})")
                 continue
 
             self._coord = theta_opt
+            self.arm.read_write_std(self._coord, self.gripper_position)
             time.sleep(OPERATION_RATE / STEPS)
-        self.arm.read_write_std(self._coord, self.gripper_position)
 
         return self.SUCCESS
 

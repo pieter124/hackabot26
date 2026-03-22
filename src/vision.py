@@ -34,7 +34,7 @@ MAX_AREA     = 120000
 MIN_SOLIDITY = 0.80
 EDGE_MARGIN_PX = 4
 PARTIAL_MIN_COVERAGE = 0.35
-VISION_CENTRE = (335,250)
+VISION_CENTRE = (335,350)
 
 
 def build_mask(hsv, color):
@@ -196,6 +196,10 @@ def detect_blocks_and_prongs(frame):
         cv2.rectangle(annotated, (x, y), (x+w, y+h), PRONG_COLOR, 2)
         cv2.putText(annotated, "Prong", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, PRONG_COLOR, 2, cv2.LINE_AA)
 
+    # Sort blocks by Euclidean distance to VISION_CENTRE (closest first)
+    block_detections.sort(key=lambda d: (d["cx"] - VISION_CENTRE[0])**2 + (d["cy"] - VISION_CENTRE[1])**2)
+    block_crosshairs = [(d["cx"], d["cy"]) for d in block_detections]
+
     # Return the annotated image, block data, and the midpoints of detected blocks.
     return annotated, block_detections, block_crosshairs
 
@@ -276,7 +280,7 @@ def calculate_camera_delta_mm(det, cam_mtx, Z):
     dy_px = det["cy"] - VISION_CENTRE[1]
     # print(f"[VISION] Pixel delta: dx={dx_px:.1f}px, dy={dy_px:.1f}px at estimated depth Z={Z:.3f}m")
     # Convert to physical mm
-    dx_mm = (dx_px * Z*100) / fx
-    dy_mm = (dy_px * Z*100) / fy
+    dx_mm = (dx_px * Z*1000) / fx
+    dy_mm = (dy_px * Z*1000) / fy
     
     return dx_mm, dy_mm
