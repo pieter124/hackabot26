@@ -1,3 +1,6 @@
+#right : [ 0.24534259 -0.14151318 -0.00273589]
+#middle: [ 0.28407441 -0.01485715  0.00209439]
+#left: [0.22676001 0.13027296 0.00511492]
 
 #finds the pal folder and adds it to the path
 import sys, os

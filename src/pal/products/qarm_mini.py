@@ -148,7 +148,7 @@ class QArmMini():
 
         # in rads
         if len(joints) != 4:
-            print ('Please provide all 4 joint positions. Going HOME instead.')
+            print ('[DRIVER] [write joint] Please provide all 4 joint positions. Going HOME instead.')
             joints = self.HOME_POSE
 
         thetaBias = [0,
@@ -331,7 +331,7 @@ class QArmMini():
 
         writeFlag = True
         if len(joints) != 4:
-            print ('Please provide all 4 joint positions. Going HOME instead.')
+            print ('[DRIVER] [read/write joint] Please provide all 4 joint positions. Going HOME instead.')
             writeFlag = False
 
         thetaBias = [0,
